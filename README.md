@@ -1,176 +1,77 @@
-# 📧 Fenix Cronjob - Sistema de Notificaciones WhatsApp
+# 📧 Asadores El Barril Cronjob - Sistema de Notificaciones WhatsApp
 
 ## 📝 Documentación General del Cronjob
 
 ### 🎯 Descripción General
 
-El **Fenix Cronjob** es un sistema automatizado de notificaciones WhatsApp que gestiona la comunicación con clientes a través de **tres escenarios principales**, ejecutándose en horarios específicos para mantener activas las ventanas de contexto de WhatsApp y mejorar la experiencia del cliente.
+El **Cronjob de Asadores El Barril** es un sistema automatizado de notificaciones WhatsApp que gestiona la comunicación con clientes a través de **tres escenarios principales**, ejecutándose en horarios específicos para mantener activas las ventanas de contexto de WhatsApp y mejorar la experiencia del cliente.
 
 ---
 
-### 🏗️ Arquitectura del Sistema
+# 📧 Asadores El Barril — Cronjob de notificaciones WhatsApp (escenario único)
 
-- **Scheduler Principal** (`src/index.ts`): Programa y ejecuta los cron jobs, valida horarios laborales antes de ejecutar y maneja logs centralizados.
-- **Motor de Lógica** (`src/utils/checkNoReplyConversations.ts`): Contiene toda la lógica de negocio, gestiona los tres escenarios de notificación e interactúa con Supabase y la API de WhatsApp.
-- **Utilidades de Tiempo** (`src/utils/timeHelpers.ts`): Validación de horarios laborales, manejo de zona horaria de Colombia y funciones de formato de tiempo.
-- **Configuración de Base de Datos** (`src/utils/supabase.ts`): Conexión a Supabase, configuración de tablas y manejo de variables de entorno.
+Resumen breve
+--------------
+Este repositorio ejecuta un único escenario: detectar conversaciones activas que llevan 48 horas sin respuesta del cliente y enviar un recordatorio por WhatsApp. La lógica principal está en `src/utils/checkNoReplyConversations.ts` y la programación en `src/index.ts`.
 
----
+Qué hace exactamente (contrato)
+- Input: consultas a Supabase sobre `chat_history` y `messages`.
+- Output: envío de un template a un número de cliente y marcado de la conversación (`notified_no_reply = true`).
+- Error modes: loguea errores y continúa con otras conversaciones.
 
-### 📅 Escenarios de Notificación
+Comportamiento detallado (basado en el código)
+- Scheduler: `src/index.ts` crea jobs para Asadores El Barril en horarios de Colombia (Lun-Vie: 8,10,12,14,16,18; Sáb: 8,10,12). Cada job llama a `checkAsadoresElBarrilConversations()`.
+- Filtrado inicial: se consultan filas en `TABLE_CHAT_HISTORY` donde `notified_no_reply = false`, `chat_status != 'closed'` y `is_archived = false`.
+- Para cada conversación:
+   - Se busca el último mensaje del asesor (`sender != 'client_message'`).
+   - Se valida que ese mensaje se haya enviado dentro del horario laboral (`isWithinBusinessHours`).
+   - Se calcula tiempo transcurrido; si >= 48 horas y el cliente no respondió después de ese mensaje, se envía un recordatorio y se marca la conversación (`notified_no_reply = true`).
 
-#### ESCENARIO 1A: Primer Barrido - 12:30 PM
+Funciones y archivos clave
+- `src/index.ts` — programación de jobs y conversión de hora Colombia → hora servidor.
+- `src/utils/checkNoReplyConversations.ts` — contiene:
+   - `checkAsadoresElBarrilConversations()` — flujo principal.
+   - `processAsadoresElBarrilConversation()` — lógica por conversación.
+   - `isWithinBusinessHours()` — valida Lun-Vie 8-18, Sáb 8-13, Dom cerrado.
+   - `sendAsadoresElBarrilReminder(phoneNumber)` — envía el template (usa `axios.post` a un URL actualmente hardcodeado en el archivo).
+   - `markAsNotifiedNoReply(conversationId)` — actualiza `notified_no_reply` en Supabase.
 
-- **Objetivo**: Notificar clientes que no han respondido después de 3+ horas.
-- **Cron**: `"30 12 * * *"` (12:30 PM todos los días)
-- **Condiciones**: Último mensaje del asesor en horario laboral (8 AM - 6 PM), cliente no ha respondido después del mensaje del asesor, `notified_no_reply = false`, `chat_status != "closed"`.
-- **Acción**: Enviar template `HXad825e16b3fef204b7e78ec9d0851950` y marcar `notified_no_reply = true`.
+Notas importantes y recomendaciones
+- El `sendAsadoresElBarrilReminder` usa hoy URLs hardcodeadas (`https://ultim.online/fenix/send-template` y `http://localhost:3024/fenix/send-template`). Recomiendo volver estas URLs configurables vía variable de entorno para entornos de staging/producción.
+- `ecosystem.config.cjs` todavía contiene el nombre del proceso anterior (`fenix-cronjob`) — si quieres que todo use `asadores-cronjob` puedo cambiarlo.
+- Tests: la suite usa Vitest y hay tests en `src/utils/tests` (no toqué nada). Tú pediste no cambiar los tests ahora; mantendré esa restricción.
 
-#### ESCENARIO 1B: Segundo Barrido - 5:30 PM
-
-- **Objetivo**: Notificar clientes que ya recibieron el primer recordatorio.
-- **Cron**: `"30 17 * * *"` (5:30 PM todos los días)
-- **Condiciones**: `notified_no_reply = true`, `notified_out_afternoon = false`, `chat_status != "closed"`.
-- **Acción**: Enviar template de tarde (ID pendiente) y marcar `notified_out_afternoon = true`.
-
-#### ESCENARIO 2: Mensajes Fuera de Horario
-
-- **Objetivo**: Notificar clientes que escriben fuera del horario laboral.
-- **Cron**: `"0 8-18/2 * * *"` (8:00, 10:00, 12:00, 14:00, 16:00, 18:00)
-- **Condiciones**: `notified_out_of_hours = false`, conversación activa.
-- **Acción**: Enviar template `HX83c6652c93ecc93e2dd53c120fd6a0ef` y marcar `notified_out_of_hours = true`.
-
----
-
-### 🕐 Horarios Laborales
-
-- **Zona Horaria**: America/Bogota (Colombia)
-- **Lunes a Viernes**: 8:00 AM - 6:00 PM
-- **Sábados**: 8:00 AM - 1:00 PM
-- **Domingos**: Cerrado (no se ejecutan jobs)
-- Validación automática mediante la función `shouldRunJobNow()`.
-
----
-
-### 🗄️ Estructura de Base de Datos
-
-- **Tabla `chat_history`**: Incluye columnas booleanas para control de notificaciones (`notified_no_reply`, `notified_out_of_hours`, `notified_out_afternoon`).
-- **Tabla `messages`**: Registra mensajes, identificando si el remitente es cliente o asesor.
-
----
-
-### 🔄 Flujo de Funcionamiento
-
-1. **Verificación**: Consulta y filtra conversaciones según el escenario y estado de las flags.
-2. **Procesamiento**: Analiza mensajes, horarios y condiciones específicas.
-3. **Notificación**: Envía el mensaje correspondiente por WhatsApp.
-4. **Marcado**: Actualiza las flags en la base de datos para evitar duplicados.
-5. **Reset**: Cuando el cliente responde, se resetean las flags para permitir futuras notificaciones.
-
----
-
-### 🔧 Funciones Principales
-
-- `checkNoReplyConversations()` - Primer barrido (12:30 PM)
-- `checkNoReplyConversationsAfternoon()` - Segundo barrido (5:30 PM)
-- `checkOutOfHoursMessages()` - Mensajes fuera de horario
-- `resetNotificationsOnClientReply()` - Resetea flags cuando el cliente responde
-
----
-
-### 📊 Sistema de Logs
-
-- Logs detallados con emojis para fácil seguimiento.
-- Registra inicio, éxito, errores y validaciones de horario.
-
----
-
-### 🚀 Integración y Consideraciones
-
-- Requiere conexión a Supabase y configuración de variables de entorno.
-- Los jobs solo se ejecutan en horario laboral válido.
-- Es fundamental integrar la función de reset en el webhook de mensajes entrantes del backend.
-- El sistema es extensible y fácilmente configurable para nuevos escenarios.
-
----
-
-## 🎯 Descripción
-
-Sistema de cron jobs automatizado con **dos escenarios** para gestionar notificaciones de WhatsApp:
-
-1. **ESCENARIO 1**: Recordatorios a clientes que no responden durante horario laboral
-2. **ESCENARIO 2**: Mensajes informativos a clientes que escriben fuera de horario laboral
-
-Ayuda a mantener activas las ventanas de contexto de WhatsApp a través de Twilio y mejora la experiencia del cliente.
-
-## 🚀 Características Principales
-
-- ⏰ **ESCENARIO 1**: Ejecución a las 12:30 PM y 5:30 PM hora Colombia
-- 🌙 **ESCENARIO 2**: Ejecución cada 2 horas de 8AM a 6PM hora Colombia
-- 🕐 **Detección inteligente**: Identifica diferentes tipos de situaciones
-- 📅 **Horario laboral**: Lun-Vie 8AM-6PM, Sáb 8AM-1PM, Dom cerrado
-- 🔄 **Control de duplicados**: Evita notificaciones repetidas usando flags específicos
-- ❌ **Filtro de estado**: Excluye conversaciones cerradas (`chat_status != "closed"`)
-- 📊 **Logs detallados**: Seguimiento completo con emojis para fácil identificación
-- 🌍 **Zona horaria**: Manejo automático de hora de Colombia independiente del servidor
-
-## 📋 Requisitos Previos
-
-### Base de Datos (Supabase)
-
-```sql
--- Agregar columnas de control en chat_history
-ALTER TABLE chat_history ADD COLUMN notified_no_reply boolean DEFAULT false;
-ALTER TABLE chat_history ADD COLUMN notified_out_of_hours boolean DEFAULT false;
-```
-
-### Variables de Entorno
-
-```env
-# Configuración de Supabase
-SUPABASE_URL=tu_supabase_url
-SUPABASE_KEY=tu_supabase_key
-
-# Nombres de tablas (opcional - por defecto usa nombres de producción)
-# Para producción:
-TABLE_CHAT_HISTORY=chat_history
-TABLE_MESSAGES=messages
-TABLE_USERS=users
-
-# Para testing:
-# TABLE_CHAT_HISTORY=chat_history_test
-# TABLE_MESSAGES=messages_test
-# TABLE_USERS=users_test
-```
-
-### Estructura de Tablas Esperada
-
-#### Tabla `chat_history`
-
-```sql
-- id (string) - ID único de la conversación
-- client_number (string) - Número de teléfono del cliente
-- chat_status (string) - Estado de la conversación ('closed', 'active', etc.)
-- notified_no_reply (boolean) - Control notificación ESCENARIO 1
-- notified_out_of_hours (boolean) - Control notificación ESCENARIO 2
-```
-
-#### Tabla `messages`
-
-```sql
-- id (string) - ID único del mensaje
-- conversation_id (string) - Referencia a chat_history
-- sender (string) - 'client_message' para clientes, cualquier otro valor para asesores
-- created_at (timestamp) - Fecha y hora del mensaje
-```
-
-## 🛠️ Instalación
-
-### 1. Clonar e instalar dependencias
+Instalación y ejecución rápida
+--------------------------------
+1. Instalar dependencias
 
 ```bash
-git clone <repository-url>
-cd fenix-cronjob
+npm install
+```
+
+2. Ejecutar en desarrollo
+
+```bash
+npm run dev
+```
+
+3. Ejecutar tests (Vitest)
+
+```bash
+npm test
+```
+
+Checklist de requisitos cubiertos por esta documentación
+- Documentar proyecto como escenario único de 48 horas — Done
+- Documentar programación y comportamiento (index.ts + checkNoReplyConversations.ts) — Done
+- No tocar tests — Acknowledged (no cambios aplicados)
+
+Siguientes pasos opcionales (dime cuál ejecutar)
+- Hacer las URLs de envío configurables vía `.env` (recomendado).
+- Renombrar `ecosystem.config.cjs` process name a `asadores-cronjob` (cambiar PM2).
+- Ajustar/optimizar tests o aumentar timeout del test que falla (me has pedido esperar para esto).
+
+Si quieres que aplique alguno de los pasos opcionales, indícame cuál y lo hago ahora.
 npm install
 ```
 
@@ -200,13 +101,13 @@ npm run dev
 ```
 
 ### Producción
-
+pm2 logs asadores-cronjob
 ```bash
 npm start
-```
+pm2 restart asadores-cronjob
 
 ### Usando PM2 (Recomendado para producción)
-
+pm2 stop asadores-cronjob
 ```bash
 # Instalar PM2 globalmente
 npm install -g pm2
@@ -302,6 +203,7 @@ fenix-cronjob/
 ```typescript
 1. Buscar conversaciones con:
    - chat_status != "closed"
+   - is_archived = false
    - notified_no_reply = false
 2. Para cada conversación:
    - Buscar último mensaje del asesor (sender != 'client_message')
@@ -333,143 +235,122 @@ fenix-cronjob/
 - **Sábados:** 8:00 AM - 1:00 PM
 - **Domingos:** Cerrado
 
-## 🔄 Reseteo de Notificaciones
+# � Asadores El Barril Cronjob - Sistema de Notificaciones WhatsApp
 
-En tu backend principal, cuando ocurran estos eventos:
+## 📝 Documentación General del Cronjob
 
-### ESCENARIO 1 - Cliente responde:
+### 🎯 Descripción General
 
-```sql
-UPDATE chat_history
-SET notified_no_reply = false
-WHERE id = 'conversation_id';
+El Cronjob de **Asadores El Barril** es un servicio que envía notificaciones automáticas por WhatsApp para mantener activas las ventanas de contexto y mejorar la atención al cliente.
+
+El sistema implementa dos escenarios principales: recordatorios a clientes que no responden en horario laboral y mensajes informativos para conversaciones iniciadas fuera de horario.
+
+---
+
+### 🏗️ Arquitectura del Sistema
+
+- `src/index.ts` — Scheduler principal y programación de jobs
+- `src/utils/checkNoReplyConversations.ts` — Lógica de detección y envíos de recordatorios
+- `src/utils/timeHelpers.ts` — Validación de horarios y zona horaria (America/Bogota)
+- `src/utils/supabase.ts` — Conexión y consultas a Supabase
+
+---
+
+### 📅 Escenarios de Notificación
+
+- ESCENARIO 1 (recordatorio): Primer barrido 12:30 PM y segundo barrido 5:30 PM (hora Colombia). Envía templates a conversaciones activas donde el cliente no respondió.
+- ESCENARIO 2 (fuera de horario): Ejecución cada 2 horas entre 8AM y 6PM (8:00,10:00,12:00,14:00,16:00,18:00). Envía un mensaje informativo a conversaciones iniciadas fuera de horario.
+
+---
+
+### 🕐 Horarios Laborales
+
+- Zona: America/Bogota (Colombia)
+- Lun-Vie: 8:00 - 18:00
+- Sábados: 8:00 - 13:00
+- Domingos: Cerrado
+
+---
+
+## � Requisitos Previos
+
+- Cuenta y credenciales de Supabase
+- Variables de entorno (ver sección Variables de Entorno)
+
+### Variables de entorno (ejemplo)
+
+```env
+SUPABASE_URL=tu_supabase_url
+SUPABASE_KEY=tu_supabase_key
+TABLE_CHAT_HISTORY=chat_history
+TABLE_MESSAGES=messages
+TABLE_USERS=users
 ```
 
-### ESCENARIO 2 - Nueva conversación o reseteo manual:
+### Estructura mínima de tablas
 
-```sql
-UPDATE chat_history
-SET notified_out_of_hours = false
-WHERE id = 'conversation_id';
-```
+- `chat_history` debe incluir flags booleanas: `notified_no_reply`, `notified_out_of_hours`, `notified_out_afternoon`.
+- `messages` debe incluir `conversation_id`, `sender` y `created_at`.
 
-## 📊 Logs del Sistema
+---
 
-### Tipos de Logs
-
-```
-🕐 [timestamp] Iniciando ESCENARIO 1...
-🌙 [timestamp] Iniciando ESCENARIO 2...
-⏸️ Job cancelado por estar fuera de horario laboral
-🔍 ESCENARIO 1: Verificando conversaciones sin respuesta...
-🌙 ESCENARIO 2: Verificando mensajes fuera de horario...
-📋 Encontradas X conversaciones para revisar
-📞 Conversación X: Último mensaje del asesor hace X horas
-🌙 Enviando mensaje de horarios a...
-📧 Enviando recordatorio a...
-✅ Template enviado exitosamente
-⚠️ No se encontró último mensaje del asesor/cliente
-❌ Error en proceso
-```
-
-### Monitoreo
+## �️ Instalación y ejecución
 
 ```bash
-# Ver logs en tiempo real
+git clone <repository-url>
+cd asadores-cronjob
+npm install
+```
+
+Desarrollo:
+
+```bash
 npm run dev
-
-# Con PM2
-pm2 logs fenix-cronjob --lines 100
 ```
 
-## 🔧 Configuración Avanzada
-
-### Modificar Horarios de Ejecución
-
-En `src/index.ts`:
-
-```typescript
-// ESCENARIO 1 - Cambiar horarios (formato cron)
-schedule.scheduleJob("30 12 * * *", ...); // 12:30 PM
-schedule.scheduleJob("30 17 * * *", ...); // 5:30 PM
-
-// ESCENARIO 2 - Cambiar frecuencia en horario laboral
-schedule.scheduleJob("0 8-18/2 * * *", ...); // Cada 2 horas de 8AM-6PM
-```
-
-### Ajustar Tiempo de Espera (ESCENARIO 1)
-
-En `src/utils/checkNoReplyConversations.ts`:
-
-```typescript
-// Cambiar de 3 horas a X horas
-if (timeDiffHours >= 3) { // Modificar este número
-```
-
-### Personalizar Horarios Laborales
-
-En `src/utils/checkNoReplyConversations.ts`:
-
-```typescript
-const isWithinBusinessHours = (date: moment.Moment): boolean => {
-  // Modificar lógica de días y horarios laborales aquí
-};
-```
-
-## 🚨 Troubleshooting
-
-### Problemas Comunes
-
-#### 1. Error de conexión a Supabase
+Producción (ejemplo con PM2):
 
 ```bash
-# Verificar variables de entorno
-echo $SUPABASE_URL
-echo $SUPABASE_KEY
+npm install -g pm2
+pm2 start ecosystem.config.cjs
+pm2 logs asadores-cronjob
+pm2 restart asadores-cronjob
+pm2 stop asadores-cronjob
 ```
 
-#### 2. Jobs no se ejecutan
+---
+
+## 🧪 Tests incluidos
+
+Este proyecto usa Vitest para pruebas unitarias. Los tests se encuentran en `src/utils/tests`.
+
+Ejecutar tests:
 
 ```bash
-# Verificar logs de horario
-npm run dev
-# ESCENARIO 1: Buscar "Job cancelado por estar fuera de horario laboral"
-# ESCENARIO 2: Verificar que esté en rango 8AM-6PM
+npm install
+npm test        # ejecuta los tests una vez
+npm run test:watch  # modo watch durante desarrollo
 ```
 
-#### 3. No se encuentran mensajes
+Tests importantes:
 
-```bash
-# Verificar estructura de tabla messages
-# ESCENARIO 1: sender != 'client_message' para mensajes del asesor
-# ESCENARIO 2: sender = 'client_message' para mensajes del cliente
-```
+- `src/utils/tests/timeHelpers.test.ts` — validaciones de horario
+- `src/utils/tests/checkNoReplyConversations.test.ts` — lógica de recordatorios
+- `src/utils/tests/sendReminder.test.ts` — envío de recordatorios (con mocks)
 
-#### 4. Templates no se envían
+Si quieres ejecutar los tests usando tablas de testing en Supabase, configura las variables `TABLE_*` en el `.env` (por ejemplo `chat_history_test`) y ejecuta los tests.
 
-```bash
-# ESCENARIO 1: templateId existente
-# ESCENARIO 2: Reemplazar "HORARIOS_TEMPLATE_ID" con ID real
-```
+---
 
-### Debug Mode
+## 🧾 Flujo de funcionamiento (resumen)
 
-Para debugging detallado, modifica los logs en:
+1. El scheduler invoca los jobs programados.
+2. El job consulta conversaciones candidatas en Supabase.
+3. Se evalúan condiciones (horario, flags, último remitente, tiempo transcurrido).
+4. Si aplica, se envía un template/message y se marca la conversación con la flag correspondiente.
+5. Cuando el cliente responde, las flags se resetean desde el webhook principal.
 
-- `src/utils/checkNoReplyConversations.ts`
-- `src/utils/timeHelpers.ts`
-
-## 📦 Dependencias Principales
-
-```json
-{
-  "node-schedule": "^2.1.1", // Programación de cron jobs
-  "moment-timezone": "^0.6.0", // Manejo de zonas horarias
-  "@supabase/supabase-js": "^2.43.5", // Cliente Supabase
-  "axios": "^1.7.7", // Requests HTTP para templates
-  "dotenv": "^16.4.5" // Variables de entorno
-}
-```
+---
 
 ## 🔒 Seguridad
 
@@ -486,11 +367,3 @@ Para debugging detallado, modifica los logs en:
 - 📊 Control de duplicados eficiente con flags específicos
 - ⏱️ Timeouts configurables
 - 🎯 Ejecución solo en horarios necesarios
-
-## 🤝 Contribución
-
-1. Fork el proyecto
-2. Crea una rama feature (`git checkout -b feature/nueva-funcionalidad`)
-3. Commit cambios (`git commit -am 'Agregar nueva funcionalidad'`)
-4. Push a la rama (`git push origin feature/nueva-funcionalidad`)
-5. Crear Pull Request
