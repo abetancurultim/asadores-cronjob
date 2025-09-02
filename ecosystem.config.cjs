@@ -1,7 +1,7 @@
 module.exports = {
     apps: [
       {
-        name: "fenix-cronjob",
+        name: "asadores-cronjob",
         script: "dist/index.js", 
         instances: 1,
         autorestart: true,

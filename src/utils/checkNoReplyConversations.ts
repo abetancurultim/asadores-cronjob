@@ -183,13 +183,13 @@ export const isWithinBusinessHours = (date: moment.Moment): boolean => {
 // Enviar recordatorio para Asadores El Barril (48 horas sin respuesta)
 export const sendAsadoresElBarrilReminder = async (phoneNumber: string): Promise<void> => {
   try {
-    const templateUrl = "https://ultim.online/fenix/send-template";
-    const testTemplateUrl = "http://localhost:3024/fenix/send-template";
+    const templateUrl = "https://ultim.online/asadores/send-template";
+    const testTemplateUrl = "http://localhost:3026/asadores/send-template";
 
     // Usamos temporalmente el template genérico del primer escenario
     const response = await axios.post(templateUrl, {
       to: phoneNumber,
-      templateId: "HXad825e16b3fef204b7e78ec9d0851950",
+      templateId: "HX054721edbc410b7cf82b7b04cb353b57", // Template de prueba
     });
 
     console.log(`✅ Recordatorio Asadores El Barril enviado exitosamente:`, response.data);
